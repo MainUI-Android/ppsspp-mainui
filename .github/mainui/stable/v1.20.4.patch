@@ -1,0 +1,575 @@
+diff --git a/android/AndroidManifest.xml b/android/AndroidManifest.xml
+index 8bdf525a19..2f21aa1a93 100644
+--- a/android/AndroidManifest.xml
++++ b/android/AndroidManifest.xml
+@@ -50,6 +50,17 @@
+         android:requestLegacyExternalStorage="true"
+         android:preserveLegacyExternalStorage="true">
+         <meta-data android:name="android.max_aspect" android:value="2.4" />
++
++        <!-- MainUI State API: MainUI (a frontend) saves and loads states with broadcasts. -->
++        <meta-data android:name="io.github.mainui.STATE_API" android:value="2" />
++        <receiver
++            android:name="io.github.mainui.stateapi.MainUIStateApi$Receiver"
++            android:exported="true"
++            tools:ignore="ExportedReceiver">
++            <intent-filter>
++                <action android:name="io.github.mainui.stateapi.COMMAND" />
++            </intent-filter>
++        </receiver>
+         <activity
+             android:name=".PpssppActivity"
+             android:configChanges="locale|keyboard|keyboardHidden|navigation|uiMode"
+diff --git a/android/build.gradle.kts b/android/build.gradle.kts
+index acf53a5fc5..825c111681 100644
+--- a/android/build.gradle.kts
++++ b/android/build.gradle.kts
+@@ -120,6 +120,8 @@ android {
+ 
+ 	defaultConfig {
+ 		applicationId = "org.ppsspp.ppsspp"
++		// MainUI-Android build: installs beside the official app (CI sets the version).
++		applicationIdSuffix = ".mainui"
+ 		// Access the git version info via the extension
+ 		if (gitVersionName != "unknown") {
+ 			println("INFO: Overriding Android Version Name, Code: $gitVersionName $gitVersionCode")
+diff --git a/android/jni/app-android.cpp b/android/jni/app-android.cpp
+index 84daae7224..552677ec43 100644
+--- a/android/jni/app-android.cpp
++++ b/android/jni/app-android.cpp
+@@ -1863,3 +1863,83 @@ Java_org_ppsspp_ppsspp_ShortcutActivity_queryGameInfo(JNIEnv * env, jclass, jobj
+ }
+ 
+ #endif
++
++// MainUI State API (io.github.mainui.stateapi.PpssppStates): MainUI (a frontend) saves and loads
++// states directly, through the pause menu's SaveState::SaveSlot / LoadSlot.
++#include <chrono>
++#include <condition_variable>
++#include <memory>
++#include <mutex>
++#include "Core/Core.h"
++#include "Core/SaveState.h"
++
++extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiRunning(JNIEnv *, jclass) {
++	GlobalUIState ui = GetUIState();
++	return PSP_IsInited() && (ui == UISTATE_INGAME || ui == UISTATE_PAUSEMENU);
++}
++
++extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiReady(JNIEnv *, jclass) {
++	// In the game, not the pause menu, not stepping in the debugger.
++	return PSP_IsInited() && GetUIState() == UISTATE_INGAME && !Core_IsStepping();
++}
++
++extern "C" jint Java_org_ppsspp_ppsspp_NativeApp_mainuiSlotCount(JNIEnv *, jclass) {
++	return g_Config.iSaveStateSlotCount;
++}
++
++extern "C" jstring Java_org_ppsspp_ppsspp_NativeApp_mainuiState(JNIEnv *env, jclass, jboolean load, jint slot) {
++	if (!PSP_IsInited())
++		return env->NewStringUTF("no game is running");
++	struct Wait {
++		std::mutex m;
++		std::condition_variable cv;
++		bool done = false;
++		SaveState::Status status = SaveState::Status::FAILURE;
++		std::string message;
++	};
++	auto w = std::make_shared<Wait>();
++	SaveState::Callback callback = [w](SaveState::Status status, std::string_view message) {
++		std::lock_guard<std::mutex> lock(w->m);
++		w->status = status;
++		w->message = std::string(message);
++		w->done = true;
++		w->cv.notify_all();
++	};
++	std::string prefix = SaveState::GetGamePrefix(g_paramSFO);
++	if (load)
++		SaveState::LoadSlot(prefix, slot, callback);
++	else
++		SaveState::SaveSlot(prefix, slot, callback);
++	std::unique_lock<std::mutex> lock(w->m);
++	if (!w->cv.wait_for(lock, std::chrono::seconds(30), [&] { return w->done; }))
++		return env->NewStringUTF(load ? "PPSSPP didn't finish loading" : "PPSSPP didn't finish saving");
++	if (w->status == SaveState::Status::FAILURE) {
++		if (!w->message.empty())
++			return env->NewStringUTF(w->message.c_str());
++		return env->NewStringUTF(load ? "PPSSPP couldn't load the state" : "PPSSPP couldn't save the state");
++	}
++	return env->NewStringUTF("");
++}
++
++extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiPause(JNIEnv *, jclass, jboolean pause) {
++	// Pause (no menu)'s break.
++	if (pause) {
++		if (!PSP_IsInited() || GetUIState() != UISTATE_INGAME || Core_IsStepping())
++			return false;
++		Core_Break(BreakReason::UIPause, 0);
++		return Core_IsStepping();
++	}
++	if (Core_IsStepping() && Core_BreakReason() == BreakReason::UIPause)
++		Core_Resume();
++	return true;
++}
++
++extern "C" jlong Java_org_ppsspp_ppsspp_NativeApp_mainuiSlotTime(JNIEnv *, jclass, jint slot) {
++	if (!PSP_IsInited())
++		return 0;
++	time_t t = 0;
++	Path path = SaveState::GenerateSaveSlotPath(SaveState::GetGamePrefix(g_paramSFO), slot, "ppst");
++	if (!File::Exists(path) || !File::GetModifTimeT(path, &t))
++		return 0;
++	return (jlong)t * 1000;
++}
+diff --git a/android/normal/res/values/mainui.xml b/android/normal/res/values/mainui.xml
+new file mode 100644
+index 0000000000..a53fc18275
+--- /dev/null
++++ b/android/normal/res/values/mainui.xml
+@@ -0,0 +1,5 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <!-- MainUI-Android build: told apart from the official app. -->
++    <string name="app_name">PPSSPP (MainUI)</string>
++</resources>
+diff --git a/android/src/io/github/mainui/stateapi/MainUIStateApi.java b/android/src/io/github/mainui/stateapi/MainUIStateApi.java
+new file mode 100644
+index 0000000000..b5b230aab4
+--- /dev/null
++++ b/android/src/io/github/mainui/stateapi/MainUIStateApi.java
+@@ -0,0 +1,291 @@
++package io.github.mainui.stateapi;
++
++import android.content.BroadcastReceiver;
++import android.content.Context;
++import android.content.Intent;
++import android.os.SystemClock;
++import android.util.Log;
++
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++
++/**
++ * MainUI State API, version 2: lets MainUI (an Android frontend) save and load states in this
++ * emulator directly, instead of pressing hotkeys it may not have, and pause the game behind its
++ * menu the way the emulator's own menu does (version 2), instead of freezing the app (which can
++ * leave it without sound).
++ *
++ * <p>MainUI sends an explicit broadcast {@link #ACTION_COMMAND} to this app with
++ * {@link #EXTRA_COMMAND} "save", "load" or "status", a {@link #EXTRA_SLOT} (0-based; {@link
++ * #RESUME_SLOT} is a separate state MainUI keeps for "continue where I left off", never one of the
++ * user's slots), a {@link #EXTRA_REQUEST} id and {@link #EXTRA_REPLY_TO} (its package). The command
++ * waits for the best moment ({@link #waitReady}): a game booted and running, not paused, not
++ * loading, not in the emulator's own menu. It is carried out on a worker thread, and the answer
++ * goes back as the broadcast {@link #ACTION_RESULT} to that package.
++ *
++ * <p>A launch intent with {@link #EXTRA_LOAD_SLOT} loads that slot once the game has booted and
++ * settled ({@link #onLaunch}).
++ *
++ * <p>The emulator says it has the API with {@code <meta-data android:name="io.github.mainui.STATE_API"
++ * android:value="1"/>} in its application, registers {@link Receiver} for {@link #ACTION_COMMAND},
++ * and attaches an {@link Emulator} while a game runs.
++ *
++ * <p>This file is the same in every emulator; only the {@link Emulator} adapter differs.
++ */
++public final class MainUIStateApi {
++    public static final int VERSION = 2;
++    private static final String TAG = "MainUIStateApi";
++
++    public static final String ACTION_COMMAND = "io.github.mainui.stateapi.COMMAND";
++    public static final String ACTION_RESULT = "io.github.mainui.stateapi.RESULT";
++    public static final String META_DATA = "io.github.mainui.STATE_API";
++
++    public static final String EXTRA_COMMAND = "command";
++    public static final String EXTRA_SLOT = "slot";
++    public static final String EXTRA_REQUEST = "request";
++    public static final String EXTRA_REPLY_TO = "reply_to";
++    /** How long the command may wait for the game to be ready (ms). */
++    public static final String EXTRA_WAIT_MS = "wait_ms";
++    /** How long the game must have been ready, without a break, before the command runs (ms; 300 by default). */
++    public static final String EXTRA_SETTLE_MS = "settle_ms";
++    /**
++     * Only a game started at or after this {@link SystemClock#uptimeMillis} counts (MainUI just
++     * launched it: never the previous game still running). 0: any.
++     */
++    public static final String EXTRA_NOT_BEFORE = "not_before";
++
++    public static final String EXTRA_OK = "ok";
++    public static final String EXTRA_ERROR = "error";
++    public static final String EXTRA_PATH = "path";
++    public static final String EXTRA_VERSION = "version";
++    public static final String EXTRA_RUNNING = "running";
++    public static final String EXTRA_READY = "ready";
++    public static final String EXTRA_SLOTS = "slots";
++    /** Status: when each user slot was saved (ms since 1970, 0 = empty). */
++    public static final String EXTRA_SLOT_TIMES = "slot_times";
++    public static final String EXTRA_RESUME_TIME = "resume_time";
++
++    /** Launch extra: load this slot once the game has booted. */
++    public static final String EXTRA_LOAD_SLOT = "io.github.mainui.stateapi.LOAD_SLOT";
++
++    /** MainUI's own "continue" state, kept apart from the user's slots. */
++    public static final int RESUME_SLOT = -1;
++
++    /** What MainUI needs from the emulator. Called on a worker thread, never the UI thread. */
++    public interface Emulator {
++        /** A game is booted (not the game list, settings, or a BIOS menu without a game). */
++        boolean isRunning();
++
++        /**
++         * A state can be saved or loaded right now: the game runs, unpaused, past its boot, not
++         * loading or in the emulator's own menu (whatever this emulator can tell).
++         */
++        boolean isReady();
++
++        /** How many user slots there are (MainUI's slots 0 .. count-1). */
++        int slotCount();
++
++        /** Saves [slot] (or {@link #RESUME_SLOT}); returns once written, with the file's path. Throws on failure. */
++        String save(int slot) throws Exception;
++
++        /** Loads [slot] (or {@link #RESUME_SLOT}); returns once loaded. Throws on failure (no such state...). */
++        void load(int slot) throws Exception;
++
++        /** When [slot] (or {@link #RESUME_SLOT}) was saved, ms since 1970; 0 when it is empty. */
++        long slotTime(int slot);
++
++        /**
++         * Pauses the game the way the emulator pauses for its own menu (sound included): MainUI's
++         * menu is open over it. False when it can't (MainUI then freezes the app).
++         */
++        default boolean pause() { return false; }
++
++        /** Lets the game run again after {@link #pause}. */
++        default void resume() {}
++    }
++
++    private static volatile Emulator emulator;
++    /** When [emulator] was attached ({@link SystemClock#uptimeMillis}). */
++    private static volatile long attachedAt;
++    private static final ExecutorService worker = Executors.newSingleThreadExecutor(r -> {
++        Thread t = new Thread(r, "mainui-state-api");
++        t.setDaemon(true);
++        return t;
++    });
++    /** Pause and resume: at once, not behind a save or load that is still waiting for the game. */
++    private static final ExecutorService control = Executors.newSingleThreadExecutor(r -> {
++        Thread t = new Thread(r, "mainui-state-api-control");
++        t.setDaemon(true);
++        return t;
++    });
++
++    private MainUIStateApi() {}
++
++    /** A game's emulator is up (call again for each new game): commands go to [e] from now on. */
++    public static void attach(Emulator e) { attachedAt = SystemClock.uptimeMillis(); emulator = e; }
++
++    /** The game ended (or its screen went away): no emulator until the next [attach]. */
++    public static void detach(Emulator e) { if (emulator == e) emulator = null; }
++
++    /**
++     * Waits until a game is running and has been ready for [stableMs] without a break, at most
++     * [timeoutMs]. A moment that is ready only in passing (between loading screens) doesn't count.
++     */
++    public static boolean waitReady(long timeoutMs, long stableMs) { return waitReady(timeoutMs, stableMs, 0); }
++
++    /** [waitReady] for a game attached at or after [notBefore] ({@link SystemClock#uptimeMillis}). */
++    public static boolean waitReady(long timeoutMs, long stableMs, long notBefore) {
++        long start = SystemClock.uptimeMillis();
++        long since = 0;
++        while (SystemClock.uptimeMillis() - start < timeoutMs) {
++            Emulator e = emulator;
++            boolean ready = false;
++            try { ready = e != null && attachedAt >= notBefore && e.isRunning() && e.isReady(); } catch (Throwable ignored) {}
++            long now = SystemClock.uptimeMillis();
++            if (ready) {
++                if (since == 0) since = now;
++                if (now - since >= stableMs) return true;
++            } else since = 0;
++            try { Thread.sleep(50); } catch (InterruptedException ie) { return false; }
++        }
++        return false;
++    }
++
++    /**
++     * The game was started with [intent]: a {@link #EXTRA_LOAD_SLOT} in it is loaded once the
++     * game has booted and run for [settleMs] (its intro past the first frames), at most 3 minutes.
++     */
++    public static void onLaunch(Intent intent, long settleMs) {
++        if (intent == null || !intent.hasExtra(EXTRA_LOAD_SLOT)) return;
++        final int slot = intent.getIntExtra(EXTRA_LOAD_SLOT, RESUME_SLOT);
++        intent.removeExtra(EXTRA_LOAD_SLOT); // once, not again when the activity is recreated
++        worker.execute(() -> {
++            if (!waitReady(180_000, settleMs)) { Log.w(TAG, "launch load of slot " + slot + ": the game never got ready"); return; }
++            Emulator e = emulator;
++            try {
++                if (e.slotTime(slot) == 0) { Log.i(TAG, "launch load: slot " + slot + " is empty"); return; }
++                e.load(slot);
++                Log.i(TAG, "launch load: slot " + slot + " loaded");
++            } catch (Throwable t) {
++                Log.w(TAG, "launch load of slot " + slot + " failed", t);
++            }
++        });
++    }
++
++    /** Carries out a command broadcast (see the class comment) and answers it. */
++    public static void handle(Context context, Intent intent) {
++        final Context ctx = context.getApplicationContext();
++        final String command = intent.getStringExtra(EXTRA_COMMAND);
++        final int slot = intent.getIntExtra(EXTRA_SLOT, 0);
++        final String request = intent.getStringExtra(EXTRA_REQUEST);
++        final String replyTo = intent.getStringExtra(EXTRA_REPLY_TO);
++        final long waitMs = intent.getLongExtra(EXTRA_WAIT_MS, 15_000);
++        final long settleMs = intent.getLongExtra(EXTRA_SETTLE_MS, 300);
++        final long notBefore = intent.getLongExtra(EXTRA_NOT_BEFORE, 0);
++        if ("pause".equals(command) || "resume".equals(command)) {
++            control.execute(() -> {
++                Intent r = result(command, slot, request);
++                try {
++                    Emulator e = emulator;
++                    if (e == null || !e.isRunning()) throw new IllegalStateException("no game is running");
++                    if ("pause".equals(command)) {
++                        if (!e.pause()) throw new IllegalStateException("can't pause");
++                    } else {
++                        e.resume();
++                    }
++                    r.putExtra(EXTRA_OK, true);
++                } catch (Throwable t) {
++                    fail(r, t);
++                }
++                answer(ctx, replyTo, r);
++            });
++            return;
++        }
++        worker.execute(() -> {
++            Intent r = result(command, slot, request);
++            try {
++                Emulator e = emulator;
++                if ("status".equals(command)) {
++                    status(r, e);
++                    r.putExtra(EXTRA_OK, true);
++                } else if ("save".equals(command) || "load".equals(command)) {
++                    if (!waitReady(waitMs, settleMs, notBefore)) throw new IllegalStateException(emulator == null ? "no game is running" : "the game wasn't ready");
++                    e = emulator;
++                    if (slot != RESUME_SLOT && (slot < 0 || slot >= e.slotCount())) throw new IllegalArgumentException("no slot " + slot);
++                    if ("save".equals(command)) {
++                        r.putExtra(EXTRA_PATH, e.save(slot));
++                    } else {
++                        if (e.slotTime(slot) == 0) throw new IllegalStateException("slot " + slot + " is empty");
++                        e.load(slot);
++                    }
++                    r.putExtra(EXTRA_OK, true);
++                } else {
++                    throw new IllegalArgumentException("unknown command " + command);
++                }
++            } catch (Throwable t) {
++                fail(r, t);
++            }
++            answer(ctx, replyTo, r);
++        });
++    }
++
++    private static Intent result(String command, int slot, String request) {
++        Intent r = new Intent(ACTION_RESULT);
++        r.putExtra(EXTRA_COMMAND, command);
++        r.putExtra(EXTRA_SLOT, slot);
++        r.putExtra(EXTRA_REQUEST, request);
++        r.putExtra(EXTRA_VERSION, VERSION);
++        return r;
++    }
++
++    private static void fail(Intent r, Throwable t) {
++        Log.w(TAG, r.getStringExtra(EXTRA_COMMAND) + " " + r.getIntExtra(EXTRA_SLOT, 0) + " failed", t);
++        r.putExtra(EXTRA_OK, false);
++        r.putExtra(EXTRA_ERROR, t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName());
++    }
++
++    private static void answer(Context ctx, String replyTo, Intent r) {
++        if (replyTo == null) return;
++        r.setPackage(replyTo);
++        // The foreground queue: the background one can hold a broadcast for seconds.
++        r.addFlags(Intent.FLAG_RECEIVER_FOREGROUND);
++        ctx.sendBroadcast(r);
++    }
++
++    private static void status(Intent r, Emulator e) {
++        boolean running = false, ready = false;
++        try { running = e != null && e.isRunning(); ready = running && e.isReady(); } catch (Throwable ignored) {}
++        r.putExtra(EXTRA_RUNNING, running);
++        r.putExtra(EXTRA_READY, ready);
++        if (e == null || !running) return;
++        int n = e.slotCount();
++        long[] times = new long[n];
++        for (int i = 0; i < n; i++) {
++            try { times[i] = e.slotTime(i); } catch (Throwable ignored) {}
++        }
++        r.putExtra(EXTRA_SLOTS, n);
++        r.putExtra(EXTRA_SLOT_TIMES, times);
++        try { r.putExtra(EXTRA_RESUME_TIME, e.slotTime(RESUME_SLOT)); } catch (Throwable ignored) {}
++    }
++
++    /**
++     * Waits until [check] is true (the save has been written...), at most [timeoutMs]. For
++     * adapters whose emulator saves asynchronously.
++     */
++    public static boolean await(java.util.concurrent.Callable<Boolean> check, long timeoutMs) throws Exception {
++        long start = SystemClock.uptimeMillis();
++        while (SystemClock.uptimeMillis() - start < timeoutMs) {
++            if (Boolean.TRUE.equals(check.call())) return true;
++            Thread.sleep(50);
++        }
++        return false;
++    }
++
++    /** The broadcast receiver to declare (exported, with an intent filter for {@link #ACTION_COMMAND}). */
++    public static final class Receiver extends BroadcastReceiver {
++        @Override
++        public void onReceive(Context context, Intent intent) {
++            if (ACTION_COMMAND.equals(intent.getAction())) handle(context, intent);
++        }
++    }
++}
+diff --git a/android/src/io/github/mainui/stateapi/PpssppStates.java b/android/src/io/github/mainui/stateapi/PpssppStates.java
+new file mode 100644
+index 0000000000..8e3b538820
+--- /dev/null
++++ b/android/src/io/github/mainui/stateapi/PpssppStates.java
+@@ -0,0 +1,66 @@
++package io.github.mainui.stateapi;
++
++import org.ppsspp.ppsspp.NativeApp;
++
++/**
++ * PPSSPP's side of the MainUI State API ({@link MainUIStateApi}). MainUI's slots 0-9 are
++ * PPSSPP's own (its menu shows the first "Savestate slot count" of them); MainUI's resume state
++ * is slot 99. Saves and loads go through PPSSPP's queue like the pause menu's and are answered
++ * once PPSSPP's callback says they are done.
++ */
++public final class PpssppStates implements MainUIStateApi.Emulator {
++    public static final PpssppStates INSTANCE = new PpssppStates();
++
++    private static final int RESUME = 99;
++
++    /** The activity is in front (resumed). */
++    static volatile boolean resumed;
++    /** A game was just asked for: the one running before it doesn't count until it has stopped. */
++    private static volatile boolean waitForStop;
++
++    private PpssppStates() {}
++
++    /** The activity is up (created, or a new game handed to it): attach for the game coming. */
++    public static void launched(boolean nativeReady) {
++        waitForStop = nativeReady && NativeApp.mainuiRunning();
++        MainUIStateApi.attach(INSTANCE);
++    }
++
++    public static void resumed(boolean r) { resumed = r; }
++
++    private static int index(int slot) { return slot == MainUIStateApi.RESUME_SLOT ? RESUME : slot; }
++
++    @Override
++    public boolean isRunning() {
++        boolean running = NativeApp.mainuiRunning();
++        if (waitForStop) {
++            if (running) return false;
++            waitForStop = false;
++        }
++        return running;
++    }
++
++    @Override public boolean isReady() { return resumed && isRunning() && NativeApp.mainuiReady(); }
++
++    @Override public int slotCount() { return Math.max(10, NativeApp.mainuiSlotCount()); }
++
++    @Override public boolean pause() { return NativeApp.mainuiPause(true); }
++
++    @Override public void resume() { NativeApp.mainuiPause(false); }
++
++    @Override
++    public String save(int slot) throws Exception {
++        String error = NativeApp.mainuiState(false, index(slot));
++        if (!error.isEmpty()) throw new IllegalStateException(error);
++        return "PPSSPP slot " + index(slot);
++    }
++
++    @Override
++    public void load(int slot) throws Exception {
++        if (slotTime(slot) == 0) throw new IllegalStateException("slot " + slot + " is empty");
++        String error = NativeApp.mainuiState(true, index(slot));
++        if (!error.isEmpty()) throw new IllegalStateException(error);
++    }
++
++    @Override public long slotTime(int slot) { return NativeApp.mainuiSlotTime(index(slot)); }
++}
+diff --git a/android/src/org/ppsspp/ppsspp/NativeApp.java b/android/src/org/ppsspp/ppsspp/NativeApp.java
+index d3fe003379..7f8458f7f1 100644
+--- a/android/src/org/ppsspp/ppsspp/NativeApp.java
++++ b/android/src/org/ppsspp/ppsspp/NativeApp.java
+@@ -48,6 +48,17 @@ public class NativeApp {
+ 	public static native boolean isLandscape();
+ 	public static native boolean isAtTopLevel();
+ 
++	// MainUI State API (io.github.mainui.stateapi.PpssppStates)
++	public static native boolean mainuiRunning();
++	public static native boolean mainuiReady();
++	public static native int mainuiSlotCount();
++	/** Saves (or loads) [slot] and waits for it: "" or what went wrong. */
++	public static native String mainuiState(boolean load, int slot);
++	/** Pauses (or resumes) the game without the menu: false if nothing changed. */
++	public static native boolean mainuiPause(boolean pause);
++	/** When [slot] was saved, ms since 1970 (0: empty). */
++	public static native long mainuiSlotTime(int slot);
++
+ 	// These have Android semantics: Resume is always called on bootup, after init
+ 	public static native void pause();
+ 	public static native void resume();
+diff --git a/android/src/org/ppsspp/ppsspp/PpssppActivity.java b/android/src/org/ppsspp/ppsspp/PpssppActivity.java
+index 62caaa4f1a..dd63c653c0 100644
+--- a/android/src/org/ppsspp/ppsspp/PpssppActivity.java
++++ b/android/src/org/ppsspp/ppsspp/PpssppActivity.java
+@@ -673,6 +673,10 @@ private void updateSystemUiVisibility() {
+ 	@Override
+ 	public void onCreate(Bundle savedInstanceState) {
+ 		super.onCreate(savedInstanceState);
++		// MainUI State API: MainUI (a frontend) saves and loads states directly.
++		if (!m_hasNoNativeBinary) {
++			io.github.mainui.stateapi.PpssppStates.launched(true);
++		}
+ 
+ 		if (m_hasNoNativeBinary) {
+ 			new Thread() {
+@@ -994,6 +998,9 @@ void setupSystemUiCallback() {
+ 	@Override
+ 	protected void onDestroy() {
+ 		super.onDestroy();
++		if (isFinishing()) {
++			io.github.mainui.stateapi.MainUIStateApi.detach(io.github.mainui.stateapi.PpssppStates.INSTANCE);
++		}
+ 		lifeCycle.onDestroy();
+ 
+ 		if (javaGL) {
+@@ -1052,6 +1059,7 @@ protected void onStop() {
+ 	@Override
+ 	protected void onPause() {
+ 		super.onPause();
++		io.github.mainui.stateapi.PpssppStates.resumed(false);
+ 		lifeCycle.onPause();
+ 
+ 		InputManager inputManager = (InputManager)getSystemService(Context.INPUT_SERVICE);
+@@ -1079,6 +1087,7 @@ protected void onPause() {
+ 	@Override
+ 	protected void onResume() {
+ 		super.onResume();
++		io.github.mainui.stateapi.PpssppStates.resumed(true);
+ 		lifeCycle.onResume();
+ 
+ 		updateSustainedPerformanceMode();
+@@ -1875,6 +1884,8 @@ public static void logIntentExtras(Intent intent) {
+ 	@Override
+ 	public void onNewIntent(Intent intent) {
+ 		super.onNewIntent(intent);
++		// MainUI State API: a new game is coming.
++		io.github.mainui.stateapi.PpssppStates.launched(true);
+ 
+ 		Log.i(TAG, "onNewIntent: " + intent.toString());
+ 
