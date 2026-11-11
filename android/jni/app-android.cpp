@@ -1942,3 +1942,70 @@ Java_org_ppsspp_ppsspp_ShortcutActivity_queryGameInfo(JNIEnv * env, jclass, jobj
 }
 
 #endif
+
+// MainUI State API (io.github.mainui.stateapi.PpssppStates): MainUI (a frontend) saves and loads
+// states directly, through the pause menu's SaveState::SaveSlot / LoadSlot.
+#include <chrono>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include "Core/Core.h"
+#include "Core/SaveState.h"
+
+extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiRunning(JNIEnv *, jclass) {
+	GlobalUIState ui = GetUIState();
+	return PSP_IsInited() && (ui == UISTATE_INGAME || ui == UISTATE_PAUSEMENU);
+}
+
+extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiReady(JNIEnv *, jclass) {
+	// In the game, not the pause menu, not stepping in the debugger.
+	return PSP_IsInited() && GetUIState() == UISTATE_INGAME && !Core_IsStepping();
+}
+
+extern "C" jint Java_org_ppsspp_ppsspp_NativeApp_mainuiSlotCount(JNIEnv *, jclass) {
+	return g_Config.iSaveStateSlotCount;
+}
+
+extern "C" jstring Java_org_ppsspp_ppsspp_NativeApp_mainuiState(JNIEnv *env, jclass, jboolean load, jint slot) {
+	if (!PSP_IsInited())
+		return env->NewStringUTF("no game is running");
+	struct Wait {
+		std::mutex m;
+		std::condition_variable cv;
+		bool done = false;
+		SaveState::Status status = SaveState::Status::FAILURE;
+		std::string message;
+	};
+	auto w = std::make_shared<Wait>();
+	SaveState::Callback callback = [w](SaveState::Status status, std::string_view message, std::string_view) {
+		std::lock_guard<std::mutex> lock(w->m);
+		w->status = status;
+		w->message = std::string(message);
+		w->done = true;
+		w->cv.notify_all();
+	};
+	std::string prefix = SaveState::GetGamePrefix(g_paramSFO);
+	if (load)
+		SaveState::LoadSlot(prefix, slot, callback);
+	else
+		SaveState::SaveSlot(prefix, slot, callback);
+	std::unique_lock<std::mutex> lock(w->m);
+	if (!w->cv.wait_for(lock, std::chrono::seconds(30), [&] { return w->done; }))
+		return env->NewStringUTF(load ? "PPSSPP didn't finish loading" : "PPSSPP didn't finish saving");
+	if (w->status == SaveState::Status::FAILURE) {
+		if (!w->message.empty())
+			return env->NewStringUTF(w->message.c_str());
+		return env->NewStringUTF(load ? "PPSSPP couldn't load the state" : "PPSSPP couldn't save the state");
+	}
+	return env->NewStringUTF("");
+}
+
+extern "C" jlong Java_org_ppsspp_ppsspp_NativeApp_mainuiSlotTime(JNIEnv *, jclass, jint slot) {
+	if (!PSP_IsInited())
+		return 0;
+	time_t t = 0;
+	Path path = SaveState::GenerateSaveSlotPath(SaveState::GetGamePrefix(g_paramSFO), slot, "ppst");
+	if (!File::Exists(path) || !File::GetModifTimeT(path, &t))
+		return 0;
+	return (jlong)t * 1000;
+}

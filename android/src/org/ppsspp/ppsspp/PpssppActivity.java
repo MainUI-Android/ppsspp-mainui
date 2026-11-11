@@ -727,6 +727,10 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 	@Override
 	public void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
+		// MainUI State API: MainUI (a frontend) saves and loads states directly.
+		if (!m_hasNoNativeBinary) {
+			io.github.mainui.stateapi.PpssppStates.launched(true);
+		}
 
 		if (BuildConfig.DEBUG) {
 			// Logs unclosed streams/cursors, unregistered receivers and leaked activities (tag StrictMode).
@@ -1110,6 +1114,9 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 		if (m_hasNoNativeBinary) {
 			return;
 		}
+		if (isFinishing()) {
+			io.github.mainui.stateapi.MainUIStateApi.detach(io.github.mainui.stateapi.PpssppStates.INSTANCE);
+		}
 		Log.i(TAG, "onDestroy begin");
 
 		mSurfaceView = null;
@@ -1253,6 +1260,7 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 	@Override
 	protected void onPause() {
 		super.onPause();
+		io.github.mainui.stateapi.PpssppStates.resumed(false);
 		if (m_hasNoNativeBinary) {
 			return;
 		}
@@ -1274,6 +1282,7 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 	@Override
 	protected void onResume() {
 		super.onResume();
+		io.github.mainui.stateapi.PpssppStates.resumed(true);
 		if (m_hasNoNativeBinary) {
 			return;
 		}
@@ -2211,6 +2220,8 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 		if (m_hasNoNativeBinary) {
 			return;
 		}
+		// MainUI State API: a new game is coming.
+		io.github.mainui.stateapi.PpssppStates.launched(true);
 
 		Log.i(TAG, "onNewIntent: " + intent.toString());
 

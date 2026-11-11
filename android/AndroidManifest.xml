@@ -53,6 +53,17 @@
         android:requestLegacyExternalStorage="true"
         android:preserveLegacyExternalStorage="true">
         <meta-data android:name="android.max_aspect" android:value="2.4" />
+
+        <!-- MainUI State API: MainUI (a frontend) saves and loads states with broadcasts. -->
+        <meta-data android:name="io.github.mainui.STATE_API" android:value="1" />
+        <receiver
+            android:name="io.github.mainui.stateapi.MainUIStateApi$Receiver"
+            android:exported="true"
+            tools:ignore="ExportedReceiver">
+            <intent-filter>
+                <action android:name="io.github.mainui.stateapi.COMMAND" />
+            </intent-filter>
+        </receiver>
         <activity
             android:name=".PpssppActivity"
             android:configChanges="locale|keyboard|keyboardHidden|navigation|uiMode|orientation|screenSize|screenLayout|smallestScreenSize|density"

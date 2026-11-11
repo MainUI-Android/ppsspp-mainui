@@ -55,6 +55,15 @@ public class NativeApp {
 
 	public static native boolean isAtTopLevel();
 
+	// MainUI State API (io.github.mainui.stateapi.PpssppStates)
+	public static native boolean mainuiRunning();
+	public static native boolean mainuiReady();
+	public static native int mainuiSlotCount();
+	/** Saves (or loads) [slot] and waits for it: "" or what went wrong. */
+	public static native String mainuiState(boolean load, int slot);
+	/** When [slot] was saved, ms since 1970 (0: empty). */
+	public static native long mainuiSlotTime(int slot);
+
 	// These have Android semantics: Resume is always called on bootup, after init
 	public static native void pause();
 	public static native void resume();

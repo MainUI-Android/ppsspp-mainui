@@ -119,6 +119,8 @@ android {
 
 	defaultConfig {
 		applicationId = "org.ppsspp.ppsspp"
+		// MainUI-Android build: installs beside the official app (CI sets the version).
+		applicationIdSuffix = ".mainui"
 		// Access the git version info via the extension
 		if (gitVersionName != "unknown") {
 			println("INFO: Overriding Android Version Name, Code: $gitVersionName $gitVersionCode")
