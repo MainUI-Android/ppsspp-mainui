@@ -2000,6 +2000,23 @@ extern "C" jstring Java_org_ppsspp_ppsspp_NativeApp_mainuiState(JNIEnv *env, jcl
 	return env->NewStringUTF("");
 }
 
+extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiPause(JNIEnv *, jclass, jboolean pause) {
+	// Pause (no menu)'s break, on the CPU thread so a resume can't overtake it.
+	bool done = false;
+	Core_RunOnCPUThread([&] {
+		if (pause) {
+			if (PSP_IsInited() && GetUIState() == UISTATE_INGAME && !Core_IsStepping()) {
+				Core_Break(BreakReason::UIPause);
+				done = Core_IsStepping();
+			}
+		} else if (Core_IsStepping() && Core_BreakReason() == BreakReason::UIPause) {
+			Core_Resume();
+			done = true;
+		}
+	});
+	return done;
+}
+
 extern "C" jlong Java_org_ppsspp_ppsspp_NativeApp_mainuiSlotTime(JNIEnv *, jclass, jint slot) {
 	if (!PSP_IsInited())
 		return 0;

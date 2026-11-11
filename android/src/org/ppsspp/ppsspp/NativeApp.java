@@ -61,6 +61,8 @@ public class NativeApp {
 	public static native int mainuiSlotCount();
 	/** Saves (or loads) [slot] and waits for it: "" or what went wrong. */
 	public static native String mainuiState(boolean load, int slot);
+	/** Pauses (or resumes) the game without the menu: false if nothing changed. */
+	public static native boolean mainuiPause(boolean pause);
 	/** When [slot] was saved, ms since 1970 (0: empty). */
 	public static native long mainuiSlotTime(int slot);
 

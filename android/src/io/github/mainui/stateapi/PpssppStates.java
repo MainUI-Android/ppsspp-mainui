@@ -44,6 +44,10 @@ public final class PpssppStates implements MainUIStateApi.Emulator {
 
     @Override public int slotCount() { return Math.max(10, NativeApp.mainuiSlotCount()); }
 
+    @Override public boolean pause() { return NativeApp.mainuiPause(true); }
+
+    @Override public void resume() { NativeApp.mainuiPause(false); }
+
     @Override
     public String save(int slot) throws Exception {
         String error = NativeApp.mainuiState(false, index(slot));
