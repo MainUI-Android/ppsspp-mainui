@@ -35,7 +35,7 @@ index acf53a5fc5..825c111681 100644
  		if (gitVersionName != "unknown") {
  			println("INFO: Overriding Android Version Name, Code: $gitVersionName $gitVersionCode")
 diff --git a/android/jni/app-android.cpp b/android/jni/app-android.cpp
-index 84daae7224..86da7693c2 100644
+index 84daae7224..c30aa48c3e 100644
 --- a/android/jni/app-android.cpp
 +++ b/android/jni/app-android.cpp
 @@ -1101,8 +1101,15 @@ extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_backbufferResize(JNIEnv
@@ -145,7 +145,7 @@ index 84daae7224..86da7693c2 100644
 +// The game a shortcutParam names is the one running (parsed like the shortcutParam message):
 +// EmuScreen ignores a request for it.
 +extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiRunsGame(JNIEnv *env, jclass, jstring jparam) {
-+	std::string prm = StripQuotes(GetJavaString(env, jparam));
++	std::string prm(StripQuotes(GetJavaString(env, jparam)));
 +	if (startsWith(prm, "file:///"))
 +		prm = UriDecode(prm.substr(7));
 +	return PSP_IsInited() && PSP_CoreParameter().fileToStart == Path(StripQuotes(prm));
