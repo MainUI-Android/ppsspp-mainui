@@ -2038,6 +2038,25 @@ extern "C" jint Java_org_ppsspp_ppsspp_NativeApp_mainuiBoots(JNIEnv *, jclass) {
 	return g_mainuiBoots.load();
 }
 
+// The game a shortcutParam command line names is the one running (parsed like the shortcutParam
+// message): EmuScreen ignores a request for it.
+extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiRunsGame(JNIEnv *env, jclass, jstring jparam) {
+	std::string prm = GetJavaString(env, jparam);
+	std::vector<std::string> parts = SplitCommandLine(prm);
+	std::vector<const char *> args;
+	args.push_back("ppsspp");
+	for (const auto &part : parts) {
+		args.push_back(part.c_str());
+	}
+	CommandLineOptions options;
+	if (options.Parse((int)args.size(), args.data()) == CommandLineParseResult::Error || options.bootFilenames.empty())
+		return false;
+	std::string bootFilename = options.bootFilenames[0];
+	if (startsWith(bootFilename, "file:///"))
+		bootFilename = UriDecode(bootFilename.substr(7));
+	return PSP_IsInited() && PSP_CoreParameter().fileToStart == Path(bootFilename);
+}
+
 extern "C" jlong Java_org_ppsspp_ppsspp_NativeApp_mainuiSlotTime(JNIEnv *, jclass, jint slot) {
 	if (!PSP_IsInited())
 		return 0;

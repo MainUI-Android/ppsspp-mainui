@@ -67,6 +67,8 @@ public class NativeApp {
 	public static native long mainuiSlotTime(int slot);
 	/** How many games have booted. */
 	public static native int mainuiBoots();
+	/** The game a shortcutParam command line names is the one running. */
+	public static native boolean mainuiRunsGame(String shortcutParam);
 
 	// These have Android semantics: Resume is always called on bootup, after init
 	public static native void pause();

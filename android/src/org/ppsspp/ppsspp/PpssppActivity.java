@@ -766,7 +766,6 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 		// using Intent extra string. Intent extra will be null if launch normal
 		// (from app drawer or file explorer).
 		String shortcutParam = parseIntent(getIntent());
-		io.github.mainui.stateapi.PpssppStates.started(shortcutParam); // MainUI State API
 		if (shortcutParam != null) {
 			Log.i(TAG, "Found Shortcut Parameter in data, passing on: " + shortcutParam);
 			setShortcutParam(shortcutParam);
@@ -1117,7 +1116,6 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 		}
 		if (isFinishing()) {
 			io.github.mainui.stateapi.MainUIStateApi.detach(io.github.mainui.stateapi.PpssppStates.INSTANCE);
-			io.github.mainui.stateapi.PpssppStates.started(null);
 		}
 		Log.i(TAG, "onDestroy begin");
 

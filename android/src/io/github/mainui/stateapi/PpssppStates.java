@@ -30,27 +30,15 @@ public final class PpssppStates implements MainUIStateApi.Emulator {
         MainUIStateApi.attach(INSTANCE);
     }
 
-    /** The game the activity was started with ([path], or null: none). */
-    public static void started(String path) {
-        lastGame = path;
-        if (path != null) lastGameBoot = NativeApp.mainuiBoots() + 1;
-    }
-
     /**
      * A game handed to the running activity (not a file picker's answer or a plain launch): the
-     * one running before it doesn't count until the new one has booted. The same game again is
-     * ignored by PPSSPP, so it changes nothing here either (unless another game booted since).
+     * one running before it doesn't count until the new one has booted. The game running already
+     * is ignored by PPSSPP, so it changes nothing here either.
      */
-    public static void newGame(String path) {
-        if (path.equals(lastGame) && NativeApp.mainuiBoots() <= lastGameBoot) return;
+    public static void newGame(String shortcutParam) {
+        if (NativeApp.mainuiRunsGame(shortcutParam)) return;
         launched(true);
-        lastGame = path;
-        lastGameBoot = bootsAtLaunch + 1;
     }
-
-    /** The last game asked for, and the boot count once it has booted. */
-    private static volatile String lastGame;
-    private static volatile int lastGameBoot;
 
     public static void resumed(boolean r) { resumed = r; }
 
