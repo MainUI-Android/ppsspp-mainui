@@ -2220,8 +2220,6 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 		if (m_hasNoNativeBinary) {
 			return;
 		}
-		// MainUI State API: a new game is coming.
-		io.github.mainui.stateapi.PpssppStates.launched(true);
 
 		Log.i(TAG, "onNewIntent: " + intent.toString());
 
@@ -2247,6 +2245,8 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 				// TODO: Actually send a command to the native code to launch the new game.
 				Log.i(TAG, "NEW INTENT AT RUNTIME: " + value);
 				Log.i(TAG, "Posting a 'shortcutParam' message to the C++ code.");
+				// MainUI State API: a new game is coming.
+				io.github.mainui.stateapi.PpssppStates.newGame(value);
 				NativeApp.sendMessageFromJava("shortcutParam", value);
 			}
 		}

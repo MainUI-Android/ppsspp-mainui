@@ -2001,19 +2001,26 @@ extern "C" jstring Java_org_ppsspp_ppsspp_NativeApp_mainuiState(JNIEnv *env, jcl
 }
 
 extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiPause(JNIEnv *, jclass, jboolean pause) {
-	// Pause (no menu)'s break, on the CPU thread so a resume can't overtake it.
+	// Pause (no menu)'s break, on the CPU thread so a resume can't overtake it. The break only
+	// takes while the CPU runs, not in a frame's last pass: tried again on the next frames.
 	bool done = false;
-	Core_RunOnCPUThread([&] {
-		if (pause) {
-			if (PSP_IsInited() && GetUIState() == UISTATE_INGAME && !Core_IsStepping()) {
-				Core_Break(BreakReason::UIPause);
+	bool noGame = false;
+	for (int i = 0; i < (pause ? 5 : 1) && !done && !noGame; i++) {
+		Core_RunOnCPUThread([&] {
+			if (pause) {
+				if (!PSP_IsInited() || GetUIState() != UISTATE_INGAME) {
+					noGame = true;
+					return;
+				}
+				if (!Core_IsStepping())
+					Core_Break(BreakReason::UIPause);
 				done = Core_IsStepping();
+			} else if (Core_IsStepping() && Core_BreakReason() == BreakReason::UIPause) {
+				Core_Resume();
+				done = true;
 			}
-		} else if (Core_IsStepping() && Core_BreakReason() == BreakReason::UIPause) {
-			Core_Resume();
-			done = true;
-		}
-	});
+		});
+	}
 	return done;
 }
 

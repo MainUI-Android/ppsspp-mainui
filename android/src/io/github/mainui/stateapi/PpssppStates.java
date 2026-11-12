@@ -26,6 +26,19 @@ public final class PpssppStates implements MainUIStateApi.Emulator {
         MainUIStateApi.attach(INSTANCE);
     }
 
+    /**
+     * A game handed to the running activity (not a file picker's answer or a plain launch): the
+     * one running before it doesn't count until it has stopped. The same game again is ignored
+     * by PPSSPP, so it changes nothing here either.
+     */
+    public static void newGame(String path) {
+        if (path.equals(lastGame)) return;
+        lastGame = path;
+        launched(true);
+    }
+
+    private static volatile String lastGame;
+
     public static void resumed(boolean r) { resumed = r; }
 
     private static int index(int slot) { return slot == MainUIStateApi.RESUME_SLOT ? RESUME : slot; }
