@@ -20,24 +20,37 @@ public final class PpssppStates implements MainUIStateApi.Emulator {
 
     private PpssppStates() {}
 
+    /** Games booted when the wait for the new one began ({@link #waitForStop}). */
+    private static volatile int bootsAtLaunch;
+
     /** The activity is up (created, or a new game handed to it): attach for the game coming. */
     public static void launched(boolean nativeReady) {
+        bootsAtLaunch = nativeReady ? NativeApp.mainuiBoots() : 0;
         waitForStop = nativeReady && NativeApp.mainuiRunning();
         MainUIStateApi.attach(INSTANCE);
     }
 
-    /**
-     * A game handed to the running activity (not a file picker's answer or a plain launch): the
-     * one running before it doesn't count until it has stopped. The same game again is ignored
-     * by PPSSPP, so it changes nothing here either.
-     */
-    public static void newGame(String path) {
-        if (path.equals(lastGame)) return;
+    /** The game the activity was started with ([path], or null: none). */
+    public static void started(String path) {
         lastGame = path;
-        launched(true);
+        if (path != null) lastGameBoot = NativeApp.mainuiBoots() + 1;
     }
 
+    /**
+     * A game handed to the running activity (not a file picker's answer or a plain launch): the
+     * one running before it doesn't count until the new one has booted. The same game again is
+     * ignored by PPSSPP, so it changes nothing here either (unless another game booted since).
+     */
+    public static void newGame(String path) {
+        if (path.equals(lastGame) && NativeApp.mainuiBoots() <= lastGameBoot) return;
+        launched(true);
+        lastGame = path;
+        lastGameBoot = bootsAtLaunch + 1;
+    }
+
+    /** The last game asked for, and the boot count once it has booted. */
     private static volatile String lastGame;
+    private static volatile int lastGameBoot;
 
     public static void resumed(boolean r) { resumed = r; }
 
@@ -47,7 +60,8 @@ public final class PpssppStates implements MainUIStateApi.Emulator {
     public boolean isRunning() {
         boolean running = NativeApp.mainuiRunning();
         if (waitForStop) {
-            if (running) return false;
+            // Over once the old game stopped or the new one booted.
+            if (running && NativeApp.mainuiBoots() == bootsAtLaunch) return false;
             waitForStop = false;
         }
         return running;

@@ -1128,8 +1128,15 @@ extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_backbufferResize(JNIEnv
 	}
 }
 
+// MainUI State API: games booted, and whether the core's UIPause break is MainUI's.
+static std::atomic<int> g_mainuiBoots{0};
+static std::atomic<bool> g_mainuiPaused{false};
+
 void System_Notify(SystemNotification notification) {
 	switch (notification) {
+	case SystemNotification::BOOT_DONE:
+		g_mainuiBoots++;
+		break;
 	case SystemNotification::ROTATE_UPDATED:
 		PushCommand("rotate", "");
 		break;
@@ -2012,16 +2019,23 @@ extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiPause(JNIEnv *, jclas
 					noGame = true;
 					return;
 				}
-				if (!Core_IsStepping())
+				// (A break already there, the user's own pause, stays theirs: answered, not taken.)
+				if (!Core_IsStepping()) {
 					Core_Break(BreakReason::UIPause);
+					g_mainuiPaused = Core_IsStepping();
+				}
 				done = Core_IsStepping();
-			} else if (Core_IsStepping() && Core_BreakReason() == BreakReason::UIPause) {
+			} else if (g_mainuiPaused.exchange(false) && Core_IsStepping() && Core_BreakReason() == BreakReason::UIPause) {
 				Core_Resume();
 				done = true;
 			}
 		});
 	}
 	return done;
+}
+
+extern "C" jint Java_org_ppsspp_ppsspp_NativeApp_mainuiBoots(JNIEnv *, jclass) {
+	return g_mainuiBoots.load();
 }
 
 extern "C" jlong Java_org_ppsspp_ppsspp_NativeApp_mainuiSlotTime(JNIEnv *, jclass, jint slot) {

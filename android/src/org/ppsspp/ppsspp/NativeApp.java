@@ -65,6 +65,8 @@ public class NativeApp {
 	public static native boolean mainuiPause(boolean pause);
 	/** When [slot] was saved, ms since 1970 (0: empty). */
 	public static native long mainuiSlotTime(int slot);
+	/** How many games have booted. */
+	public static native int mainuiBoots();
 
 	// These have Android semantics: Resume is always called on bootup, after init
 	public static native void pause();
