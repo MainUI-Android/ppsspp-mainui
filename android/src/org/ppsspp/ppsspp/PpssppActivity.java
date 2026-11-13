@@ -727,10 +727,6 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 	@Override
 	public void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
-		// MainUI State API: MainUI (a frontend) saves and loads states directly.
-		if (!m_hasNoNativeBinary) {
-			io.github.mainui.stateapi.PpssppStates.launched(true);
-		}
 
 		if (BuildConfig.DEBUG) {
 			// Logs unclosed streams/cursors, unregistered receivers and leaked activities (tag StrictMode).
@@ -835,6 +831,10 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 			Log.i(TAG, "Got shortcutParam in onCreate on secondary run: " + shortcutParam);
 			NativeApp.sendMessageFromJava("shortcutParam", shortcutParam);
 		}
+
+		// MainUI State API: MainUI (a frontend) saves and loads states directly. A recreate's game is the one
+		// running already.
+		io.github.mainui.stateapi.PpssppStates.created(this, !firstRun && savedInstanceState == null ? shortcutParam : null);
 
 		// Set up the back key handling to be future-compatible
 		OnBackPressedCallback callback = new OnBackPressedCallback(true) {
@@ -1115,7 +1115,7 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 			return;
 		}
 		if (isFinishing()) {
-			io.github.mainui.stateapi.MainUIStateApi.detach(io.github.mainui.stateapi.PpssppStates.INSTANCE);
+			io.github.mainui.stateapi.PpssppStates.finished(this);
 		}
 		Log.i(TAG, "onDestroy begin");
 
@@ -1260,7 +1260,7 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 	@Override
 	protected void onPause() {
 		super.onPause();
-		io.github.mainui.stateapi.PpssppStates.resumed(false);
+		io.github.mainui.stateapi.PpssppStates.resumed(this, false);
 		if (m_hasNoNativeBinary) {
 			return;
 		}
@@ -1282,7 +1282,7 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 	@Override
 	protected void onResume() {
 		super.onResume();
-		io.github.mainui.stateapi.PpssppStates.resumed(true);
+		io.github.mainui.stateapi.PpssppStates.resumed(this, true);
 		if (m_hasNoNativeBinary) {
 			return;
 		}

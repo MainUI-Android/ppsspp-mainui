@@ -2,6 +2,8 @@ package io.github.mainui.stateapi;
 
 import org.ppsspp.ppsspp.NativeApp;
 
+import java.lang.ref.WeakReference;
+
 /**
  * PPSSPP's side of the MainUI State API ({@link MainUIStateApi}). MainUI's slots 0-9 are
  * PPSSPP's own (its menu shows the first "Savestate slot count" of them); MainUI's resume state
@@ -23,11 +25,32 @@ public final class PpssppStates implements MainUIStateApi.Emulator {
     /** Games booted when the wait for the new one began ({@link #waitForStop}). */
     private static volatile int bootsAtLaunch;
 
-    /** The activity is up (created, or a new game handed to it): attach for the game coming. */
-    public static void launched(boolean nativeReady) {
-        bootsAtLaunch = nativeReady ? NativeApp.mainuiBoots() : 0;
-        waitForStop = nativeReady && NativeApp.mainuiRunning();
+    /** A game is coming ([newGame]: the one running doesn't count until it has booted), or not: attach. */
+    private static void launched(boolean newGame) {
+        bootsAtLaunch = newGame ? NativeApp.mainuiBoots() : 0;
+        waitForStop = newGame && NativeApp.mainuiRunning();
         MainUIStateApi.attach(INSTANCE);
+    }
+
+    /** The activity followed: the newest one created. */
+    private static WeakReference<Object> owner = new WeakReference<>(null);
+
+    /**
+     * [activity] was created. [shortcutParam]: the game it hands to a native side already up
+     * (null: none, a first start, or a recreate). Without another game the one running, if any,
+     * is still the game: an activity backed out of leaves it running for the next one.
+     */
+    public static void created(Object activity, String shortcutParam) {
+        owner = new WeakReference<>(activity);
+        launched(shortcutParam != null && !shortcutParam.isEmpty() && !NativeApp.mainuiRunsGame(shortcutParam));
+    }
+
+    /**
+     * [activity] is gone for good: no game until the next one, unless that one came already (a
+     * finish() and a quick relaunch, where the old activity's last calls come after the new one's).
+     */
+    public static void finished(Object activity) {
+        if (owner.get() == activity) MainUIStateApi.detach(INSTANCE);
     }
 
     /**
@@ -40,7 +63,7 @@ public final class PpssppStates implements MainUIStateApi.Emulator {
         launched(true);
     }
 
-    public static void resumed(boolean r) { resumed = r; }
+    public static void resumed(Object activity, boolean r) { if (owner.get() == activity) resumed = r; }
 
     private static int index(int slot) { return slot == MainUIStateApi.RESUME_SLOT ? RESUME : slot; }
 

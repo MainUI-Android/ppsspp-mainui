@@ -1128,13 +1128,16 @@ extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_backbufferResize(JNIEnv
 	}
 }
 
-// MainUI State API: games booted, and whether the core's UIPause break is MainUI's.
+// MainUI State API: games booted, whether the core's UIPause break is MainUI's, and MainUI's
+// pause / resume requests, counted (only the newest one counts).
 static std::atomic<int> g_mainuiBoots{0};
 static std::atomic<bool> g_mainuiPaused{false};
+static std::atomic<int> g_mainuiRequest{0};
 
 void System_Notify(SystemNotification notification) {
 	switch (notification) {
 	case SystemNotification::BOOT_DONE:
+		g_mainuiPaused = false;
 		g_mainuiBoots++;
 		break;
 	case SystemNotification::ROTATE_UPDATED:
@@ -1956,6 +1959,7 @@ Java_org_ppsspp_ppsspp_ShortcutActivity_queryGameInfo(JNIEnv * env, jclass, jobj
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include "Core/Core.h"
 #include "Core/SaveState.h"
 
@@ -1965,8 +1969,9 @@ extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiRunning(JNIEnv *, jcl
 }
 
 extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiReady(JNIEnv *, jclass) {
-	// In the game, not the pause menu, not stepping in the debugger.
-	return PSP_IsInited() && GetUIState() == UISTATE_INGAME && !Core_IsStepping();
+	// In the game, not the pause menu, not stepping in the debugger. Paused (no menu) is fine:
+	// states are saved and loaded while paused too.
+	return PSP_IsInited() && GetUIState() == UISTATE_INGAME && (!Core_IsStepping() || Core_BreakReason() == BreakReason::UIPause);
 }
 
 extern "C" jint Java_org_ppsspp_ppsspp_NativeApp_mainuiSlotCount(JNIEnv *, jclass) {
@@ -2007,31 +2012,54 @@ extern "C" jstring Java_org_ppsspp_ppsspp_NativeApp_mainuiState(JNIEnv *env, jcl
 	return env->NewStringUTF("");
 }
 
-extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiPause(JNIEnv *, jclass, jboolean pause) {
-	// Pause (no menu)'s break, on the CPU thread so a resume can't overtake it. The break only
-	// takes while the CPU runs, not in a frame's last pass: tried again on the next frames.
-	bool done = false;
-	bool noGame = false;
-	for (int i = 0; i < (pause ? 5 : 1) && !done && !noGame; i++) {
-		Core_RunOnCPUThread([&] {
-			if (pause) {
-				if (!PSP_IsInited() || GetUIState() != UISTATE_INGAME) {
-					noGame = true;
-					return;
+extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiPause(JNIEnv *, jclass, jboolean jpause) {
+	// Pause (no menu)'s break, on the CPU thread. That thread only runs while the game is on screen:
+	// a request it hasn't got to in time is answered and still carried out once it runs, unless a
+	// newer request or another game came first.
+	const bool pause = jpause;
+	const int request = ++g_mainuiRequest;
+	const int boots = g_mainuiBoots;
+	struct Result {
+		std::mutex m;
+		std::condition_variable cv;
+		bool done = false;
+		bool ok = false;
+	};
+	auto r = std::make_shared<Result>();
+	std::thread([r, pause, request, boots] {
+		bool ok = false;
+		bool over = false;
+		// The break only takes while the CPU runs, not in a frame's last pass: tried again on the next frames.
+		for (int i = 0; i < 5 && !over; i++) {
+			Core_RunOnCPUThread([&] {
+				if (request != g_mainuiRequest || boots != g_mainuiBoots) {
+					over = true;
+				} else if (!pause) {
+					if (g_mainuiPaused.exchange(false) && Core_IsStepping() && Core_BreakReason() == BreakReason::UIPause)
+						Core_Resume();
+					ok = over = true;
+				} else if (!PSP_IsInited() || GetUIState() != UISTATE_INGAME) {
+					over = true;
+				} else {
+					// (A break already there, the user's own pause, stays theirs: answered, not taken.)
+					if (!Core_IsStepping()) {
+						Core_Break(BreakReason::UIPause);
+						if (Core_IsStepping())
+							g_mainuiPaused = true;
+					}
+					ok = over = Core_IsStepping();
 				}
-				// (A break already there, the user's own pause, stays theirs: answered, not taken.)
-				if (!Core_IsStepping()) {
-					Core_Break(BreakReason::UIPause);
-					g_mainuiPaused = Core_IsStepping();
-				}
-				done = Core_IsStepping();
-			} else if (g_mainuiPaused.exchange(false) && Core_IsStepping() && Core_BreakReason() == BreakReason::UIPause) {
-				Core_Resume();
-				done = true;
-			}
-		});
-	}
-	return done;
+			});
+		}
+		std::lock_guard<std::mutex> lock(r->m);
+		r->ok = ok;
+		r->done = true;
+		r->cv.notify_all();
+	}).detach();
+	std::unique_lock<std::mutex> lock(r->m);
+	if (!r->cv.wait_for(lock, std::chrono::milliseconds(1500), [&] { return r->done; }))
+		return true;
+	return r->ok;
 }
 
 extern "C" jint Java_org_ppsspp_ppsspp_NativeApp_mainuiBoots(JNIEnv *, jclass) {
