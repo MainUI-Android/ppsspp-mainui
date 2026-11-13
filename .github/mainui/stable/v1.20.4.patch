@@ -1,4 +1,4 @@
-MainUI patch 02a3ee6240ba
+MainUI patch f0bf8ec1a746
 diff --git a/android/AndroidManifest.xml b/android/AndroidManifest.xml
 index 8bdf525a19..2f21aa1a93 100644
 --- a/android/AndroidManifest.xml
@@ -35,10 +35,10 @@ index acf53a5fc5..825c111681 100644
  		if (gitVersionName != "unknown") {
  			println("INFO: Overriding Android Version Name, Code: $gitVersionName $gitVersionCode")
 diff --git a/android/jni/app-android.cpp b/android/jni/app-android.cpp
-index 84daae7224..c30aa48c3e 100644
+index 84daae7224..2b2e9dd30f 100644
 --- a/android/jni/app-android.cpp
 +++ b/android/jni/app-android.cpp
-@@ -1101,8 +1101,15 @@ extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_backbufferResize(JNIEnv
+@@ -1101,8 +1101,16 @@ extern "C" void JNICALL Java_org_ppsspp_ppsspp_NativeApp_backbufferResize(JNIEnv
  	}
  }
  
@@ -49,12 +49,13 @@ index 84daae7224..c30aa48c3e 100644
  void System_Notify(SystemNotification notification) {
  	switch (notification) {
 +	case SystemNotification::BOOT_DONE:
++		g_mainuiPaused = false;
 +		g_mainuiBoots++;
 +		break;
  	case SystemNotification::ROTATE_UPDATED:
  		PushCommand("rotate", "");
  		break;
-@@ -1863,3 +1870,105 @@ Java_org_ppsspp_ppsspp_ShortcutActivity_queryGameInfo(JNIEnv * env, jclass, jobj
+@@ -1863,3 +1871,107 @@ Java_org_ppsspp_ppsspp_ShortcutActivity_queryGameInfo(JNIEnv * env, jclass, jobj
  }
  
  #endif
@@ -74,8 +75,9 @@ index 84daae7224..c30aa48c3e 100644
 +}
 +
 +extern "C" jboolean Java_org_ppsspp_ppsspp_NativeApp_mainuiReady(JNIEnv *, jclass) {
-+	// In the game, not the pause menu, not stepping in the debugger.
-+	return PSP_IsInited() && GetUIState() == UISTATE_INGAME && !Core_IsStepping();
++	// In the game, not the pause menu, not stepping in the debugger. Paused (no menu) is fine:
++	// states are saved and loaded while paused too.
++	return PSP_IsInited() && GetUIState() == UISTATE_INGAME && (!Core_IsStepping() || Core_BreakReason() == BreakReason::UIPause);
 +}
 +
 +extern "C" jint Java_org_ppsspp_ppsspp_NativeApp_mainuiSlotCount(JNIEnv *, jclass) {
@@ -125,7 +127,8 @@ index 84daae7224..c30aa48c3e 100644
 +				return false;
 +			if (!Core_IsStepping()) {
 +				Core_Break(BreakReason::UIPause, 0);
-+				g_mainuiPaused = Core_IsStepping();
++				if (Core_IsStepping())
++					g_mainuiPaused = true;
 +			}
 +			if (Core_IsStepping())
 +				return true;
@@ -517,13 +520,15 @@ index 0000000000..86487ab01a
 +}
 diff --git a/android/src/io/github/mainui/stateapi/PpssppStates.java b/android/src/io/github/mainui/stateapi/PpssppStates.java
 new file mode 100644
-index 0000000000..509f01fb3a
+index 0000000000..215f868fda
 --- /dev/null
 +++ b/android/src/io/github/mainui/stateapi/PpssppStates.java
-@@ -0,0 +1,81 @@
+@@ -0,0 +1,104 @@
 +package io.github.mainui.stateapi;
 +
 +import org.ppsspp.ppsspp.NativeApp;
++
++import java.lang.ref.WeakReference;
 +
 +/**
 + * PPSSPP's side of the MainUI State API ({@link MainUIStateApi}). MainUI's slots 0-9 are
@@ -546,11 +551,32 @@ index 0000000000..509f01fb3a
 +    /** Games booted when the wait for the new one began ({@link #waitForStop}). */
 +    private static volatile int bootsAtLaunch;
 +
-+    /** The activity is up (created, or a new game handed to it): attach for the game coming. */
-+    public static void launched(boolean nativeReady) {
-+        bootsAtLaunch = nativeReady ? NativeApp.mainuiBoots() : 0;
-+        waitForStop = nativeReady && NativeApp.mainuiRunning();
++    /** A game is coming ([newGame]: the one running doesn't count until it has booted), or not: attach. */
++    private static void launched(boolean newGame) {
++        bootsAtLaunch = newGame ? NativeApp.mainuiBoots() : 0;
++        waitForStop = newGame && NativeApp.mainuiRunning();
 +        MainUIStateApi.attach(INSTANCE);
++    }
++
++    /** The activity followed: the newest one created. */
++    private static WeakReference<Object> owner = new WeakReference<>(null);
++
++    /**
++     * [activity] was created. [shortcutParam]: the game it hands to a native side already up
++     * (null: none, a first start, or a recreate). Without another game the one running, if any,
++     * is still the game: an activity backed out of leaves it running for the next one.
++     */
++    public static void created(Object activity, String shortcutParam) {
++        owner = new WeakReference<>(activity);
++        launched(shortcutParam != null && !shortcutParam.isEmpty() && !NativeApp.mainuiRunsGame(shortcutParam));
++    }
++
++    /**
++     * [activity] is gone for good: no game until the next one, unless that one came already (a
++     * finish() and a quick relaunch, where the old activity's last calls come after the new one's).
++     */
++    public static void finished(Object activity) {
++        if (owner.get() == activity) MainUIStateApi.detach(INSTANCE);
 +    }
 +
 +    /**
@@ -563,7 +589,7 @@ index 0000000000..509f01fb3a
 +        launched(true);
 +    }
 +
-+    public static void resumed(boolean r) { resumed = r; }
++    public static void resumed(Object activity, boolean r) { if (owner.get() == activity) resumed = r; }
 +
 +    private static int index(int slot) { return slot == MainUIStateApi.RESUME_SLOT ? RESUME : slot; }
 +
@@ -629,47 +655,55 @@ index d3fe003379..7cb670998e 100644
  	public static native void pause();
  	public static native void resume();
 diff --git a/android/src/org/ppsspp/ppsspp/PpssppActivity.java b/android/src/org/ppsspp/ppsspp/PpssppActivity.java
-index 62caaa4f1a..b9e57a9940 100644
+index 62caaa4f1a..0659a3f2fd 100644
 --- a/android/src/org/ppsspp/ppsspp/PpssppActivity.java
 +++ b/android/src/org/ppsspp/ppsspp/PpssppActivity.java
-@@ -673,6 +673,10 @@ private void updateSystemUiVisibility() {
- 	@Override
- 	public void onCreate(Bundle savedInstanceState) {
- 		super.onCreate(savedInstanceState);
-+		// MainUI State API: MainUI (a frontend) saves and loads states directly.
-+		if (!m_hasNoNativeBinary) {
-+			io.github.mainui.stateapi.PpssppStates.launched(true);
-+		}
+@@ -722,6 +722,7 @@ public void run() {
+ 		// whether to start at 1x or 2x.
+ 		sizeManager.updateDisplayMeasurements();
  
- 		if (m_hasNoNativeBinary) {
- 			new Thread() {
-@@ -994,6 +998,9 @@ void setupSystemUiCallback() {
++		final boolean firstRun = !initialized;
+ 		if (!initialized) {
+ 			Initialize();
+ 			initialized = true;
+@@ -790,6 +791,10 @@ public void run() {
+ 			NativeApp.sendMessageFromJava("shortcutParam", shortcutParam);
+ 		}
+ 
++		// MainUI State API: MainUI (a frontend) saves and loads states directly. A recreate's game is the one
++		// running already.
++		io.github.mainui.stateapi.PpssppStates.created(this, !firstRun && savedInstanceState == null ? shortcutParam : null);
++
+ 		// Set up the back key handling to be future-compatible
+ 		OnBackPressedCallback callback = new OnBackPressedCallback(true) {
+ 			// Note: For "pretty" back handling internally, we could handle things like handleOnBackProgressed etc
+@@ -994,6 +999,9 @@ void setupSystemUiCallback() {
  	@Override
  	protected void onDestroy() {
  		super.onDestroy();
 +		if (isFinishing()) {
-+			io.github.mainui.stateapi.MainUIStateApi.detach(io.github.mainui.stateapi.PpssppStates.INSTANCE);
++			io.github.mainui.stateapi.PpssppStates.finished(this);
 +		}
  		lifeCycle.onDestroy();
  
  		if (javaGL) {
-@@ -1052,6 +1059,7 @@ protected void onStop() {
+@@ -1052,6 +1060,7 @@ protected void onStop() {
  	@Override
  	protected void onPause() {
  		super.onPause();
-+		io.github.mainui.stateapi.PpssppStates.resumed(false);
++		io.github.mainui.stateapi.PpssppStates.resumed(this, false);
  		lifeCycle.onPause();
  
  		InputManager inputManager = (InputManager)getSystemService(Context.INPUT_SERVICE);
-@@ -1079,6 +1087,7 @@ protected void onPause() {
+@@ -1079,6 +1088,7 @@ protected void onPause() {
  	@Override
  	protected void onResume() {
  		super.onResume();
-+		io.github.mainui.stateapi.PpssppStates.resumed(true);
++		io.github.mainui.stateapi.PpssppStates.resumed(this, true);
  		lifeCycle.onResume();
  
  		updateSustainedPerformanceMode();
-@@ -1875,7 +1884,6 @@ public static void logIntentExtras(Intent intent) {
+@@ -1875,7 +1885,6 @@ public static void logIntentExtras(Intent intent) {
  	@Override
  	public void onNewIntent(Intent intent) {
  		super.onNewIntent(intent);
@@ -677,7 +711,7 @@ index 62caaa4f1a..b9e57a9940 100644
  		Log.i(TAG, "onNewIntent: " + intent.toString());
  
  		if (intent.hasExtra("request_id")) {
-@@ -1899,6 +1907,8 @@ public void onNewIntent(Intent intent) {
+@@ -1899,6 +1908,8 @@ public void onNewIntent(Intent intent) {
  				// TODO: Actually send a command to the native code to launch the new game.
  				Log.i(TAG, "NEW INTENT AT RUNTIME: " + value);
  				Log.i(TAG, "Posting a 'shortcutParam' message to the C++ code.");
