@@ -1260,7 +1260,7 @@ void EmuScreen::CreateViews() {
 
 	root_ = CreatePadLayout(touch, bounds.w, bounds.h, &pauseTrigger_, &g_controlMapper);
 	if (g_Config.bShowDeveloperMenu) {
-		root_->Add(new Button(dev->T("DevMenu")))->OnClick.Handle(this, &EmuScreen::OnDevTools);
+		root_->Add(new Button(dev->T("DevMenu"), new AnchorLayoutParams(12, 12, NONE, NONE)))->OnClick.Handle(this, &EmuScreen::OnDevTools);
 	}
 
 	LinearLayout *buttons = new LinearLayout(Orientation::ORIENT_HORIZONTAL, new AnchorLayoutParams(bounds.centerX(), NONE, NONE, 60, Centering::Both));
@@ -1272,6 +1272,7 @@ void EmuScreen::CreateViews() {
 		if (coreState == CoreState::CORE_RUNTIME_ERROR) {
 			// Force it!
 			Memory::MemFault_IgnoreLastCrash();
+			Core_ResetException();
 			coreState = CoreState::CORE_RUNNING_CPU;
 		}
 	});
@@ -1290,6 +1291,25 @@ void EmuScreen::CreateViews() {
 		this->pauseTrigger_ = true;
 	});
 	backButton_->SetVisibility(V_GONE);
+
+	auto rp = GetI18NCategory(I18NCat::REPORTING);
+	reportCrashButton_ = buttons->Add(new Button(rp->T("Report crash")));
+	reportCrashButton_->OnClick.Add([this](UI::EventParams &) {
+		if (crashSeen_ && !crashReported_) {
+			Reporting::ReportCrash(Core_GetExceptionInfo(), true);
+			crashReported_ = true;
+			auto rp = GetI18NCategory(I18NCat::REPORTING);
+			g_OSD.Show(OSDType::MESSAGE_SUCCESS, rp->T("Crash report sent"));
+		}
+	});
+	reportCrashButton_->SetVisibility(V_GONE);
+
+	reportCrashBlocked_ = root_->Add(new TextView(rp->T("CrashReportCheatsPlugins", "Cheats and plugins can change the game's code in unpredictable ways, so crashes with them enabled can't be reported."),
+		ALIGN_HCENTER | FLAG_WRAP_TEXT, true, new AnchorLayoutParams(bounds.w - 40.0f, WRAP_CONTENT, bounds.centerX(), NONE, NONE, 10.0f, Centering::Horizontal)));
+	reportCrashBlocked_->SetShadow(true);
+	reportCrashBlocked_->SetVisibility(V_GONE);
+
+	buttons->SetRoundCorners();
 
 	cardboardDisableButton_ = root_->Add(new Button(sc->T("Cardboard VR OFF"), new AnchorLayoutParams(bounds.centerX(), NONE, NONE, 30, Centering::Both)));
 	DeviceOrientation orientation = GetDeviceOrientation();
@@ -1467,6 +1487,25 @@ void EmuScreen::update() {
 	resumeButton_->SetVisibility(coreState == CoreState::CORE_RUNTIME_ERROR && Memory::MemFault_MayBeResumable() ? V_VISIBLE : V_GONE);
 	resetButton_->SetVisibility(coreState == CoreState::CORE_RUNTIME_ERROR ? V_VISIBLE : V_GONE);
 	backButton_->SetVisibility(coreState == CoreState::CORE_RUNTIME_ERROR ? V_VISIBLE : V_GONE);
+
+	// The same condition as drawing the crash screen.
+	const bool crashed = (coreState == CoreState::CORE_RUNTIME_ERROR || coreState == CoreState::CORE_STEPPING_CPU) && Core_GetExceptionInfo().type != MIPSExceptionType::NONE;
+	if (crashed && !crashSeen_) {
+		crashSeen_ = true;
+		crashReported_ = Reporting::CrashAlreadyReported(Core_GetExceptionInfo());
+		if (Reporting::IsEnabled()) {
+			Reporting::ReportCrash(Core_GetExceptionInfo(), false);
+			crashReported_ = true;
+		}
+	} else if (!crashed) {
+		crashSeen_ = false;
+	}
+	// With cheats or plugins, the button stays up but disabled, to say why there's no report.
+	const bool reportBlocked = Reporting::CheatsOrPluginsInEffect();
+	const bool showReportButton = crashed && !crashReported_ && !Reporting::CrashReportsOff() && (reportBlocked || Reporting::CanReportCrashManually());
+	reportCrashButton_->SetVisibility(showReportButton ? V_VISIBLE : V_GONE);
+	reportCrashButton_->SetEnabled(!reportBlocked);
+	reportCrashBlocked_->SetVisibility(showReportButton && reportBlocked ? V_VISIBLE : V_GONE);
 
 	if (chatButton_ && chatMenu_) {
 		if (chatMenu_->GetVisibility() != V_GONE) {

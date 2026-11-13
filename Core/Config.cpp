@@ -382,8 +382,8 @@ static constexpr ConfigSetting generalSettings[] = {
 	ConfigSetting("RemoteScrollPosition", SETTING(g_Config, fRemoteScrollPosition), 0.0f, CfgFlag::DEFAULT),
 	ConfigSetting("DebugOverlay", SETTING(g_Config, iDebugOverlay), 0, CfgFlag::DONT_SAVE),
 	ConfigSetting("DefaultTab", SETTING(g_Config, iDefaultTab), 0, CfgFlag::DEFAULT),
-	ConfigSetting("DisableHLEFlags", SETTING(g_Config, iDisableHLE), 0, CfgFlag::PER_GAME),
-	ConfigSetting("ForceEnableHLEFlags", SETTING(g_Config, iForceEnableHLE), 0, CfgFlag::PER_GAME),
+	ConfigSetting("DisableHLEFlags", SETTING(g_Config, iDisableHLE), 0, CfgFlag::PER_GAME | CfgFlag::REPORT),
+	ConfigSetting("ForceEnableHLEFlags", SETTING(g_Config, iForceEnableHLE), 0, CfgFlag::PER_GAME | CfgFlag::REPORT),
 
 	ConfigSetting("ScreenshotMode", SETTING(g_Config, iScreenshotMode), 0, CfgFlag::DEFAULT)
 		.Label(I18NCat::SYSTEM, "Screenshot mode").Choices(screenshotModeNames),
@@ -572,14 +572,14 @@ static constexpr ConfigSetting cpuSettings[] = {
 		.Label(I18NCat::SYSTEM, "I/O timing method").Choices(iOTimingMethodNames),
 	ConfigSetting("FastMemoryAccess", SETTING(g_Config, bFastMemory), true, CfgFlag::PER_GAME)
 		.Label(I18NCat::SYSTEM, "Fast Memory"),
-	ConfigSetting("EmulateMediaEngine", SETTING(g_Config, bEmulateMediaEngine), false, CfgFlag::REPORT)
+	ConfigSetting("EmulateMediaEngine", SETTING(g_Config, bEmulateMediaEngine), true, CfgFlag::REPORT)
 		.Label(I18NCat::DEVELOPER, "Enable ME emulation for homebrew"),
 	ConfigSetting("FunctionReplacements", SETTING(g_Config, bFuncReplacements), true, CfgFlag::PER_GAME | CfgFlag::REPORT),
 	ConfigSetting("HideSlowWarnings", SETTING(g_Config, bHideSlowWarnings), false, CfgFlag::DEFAULT),
 	ConfigSetting("HideStateWarnings", SETTING(g_Config, bHideStateWarnings), false, CfgFlag::DEFAULT),
 	ConfigSetting("JitDisableFlags", SETTING(g_Config, uJitDisableFlags), (uint32_t)0, CfgFlag::PER_GAME),
 	ConfigSetting("CPUSpeed", SETTING(g_Config, iLockedCPUSpeed), 0, CfgFlag::PER_GAME | CfgFlag::REPORT)
-		.Label(I18NCat::SYSTEM, "Change CPU Clock", "Change CPU Clock (unstable)").Range(0, 1000).Units("MHz").ZeroLabel("Auto"),
+		.Label(I18NCat::SYSTEM, "PSP system clock speed").Range(0, 1000).Units("MHz").ZeroLabel("Auto"),
 };
 
 static int DefaultInternalResolution() {
@@ -614,7 +614,7 @@ const char * const vulkanDefaultBlacklist[] = {
 
 static int DefaultGPUBackend() {
 	if (IsVREnabled()) {
-		// Falls back to OpenGL if the runtime can't take a Vulkan session (VulkanMayBeAvailable).
+		// The only backend with VR.
 		return (int)GPUBackend::VULKAN;
 	}
 
@@ -702,7 +702,7 @@ int Config::NextValidBackend() {
 		}
 #endif
 #if PPSSPP_API(ANY_GL)
-		if (!failed.count(GPUBackend::OPENGL)) {
+		if (!failed.count(GPUBackend::OPENGL) && IsBackendEnabled(GPUBackend::OPENGL)) {
 			return (int)GPUBackend::OPENGL;
 		}
 #endif
@@ -756,6 +756,9 @@ bool Config::IsBackendEnabled(GPUBackend backend) {
 	if (backend == GPUBackend::OPENGL)
 		return false;
 #endif
+	// VR is Vulkan only.
+	if (backend == GPUBackend::OPENGL && IsVREnabled())
+		return false;
 	// On normal boots, this is where the Vulkan driver gets loaded the first time, in this check.
 	// That's a bit weird actually. But at least the config is loaded.
 	if (backend == GPUBackend::VULKAN && !VulkanMayBeAvailable())
