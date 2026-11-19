@@ -391,6 +391,9 @@ public:
 	int iCurrentStateSlot;
 	int iRewindSnapshotInterval;
 	bool bUISound;
+	int iUISoundStyle;  // UISoundStyle
+	int iHomeScreenStyle;  // HomeScreenStyle
+	bool bGameBootAnimation;
 	bool bEnableStateUndo;
 	bool bConfirmLoadState;
 	std::string sStateLoadUndoGame;
@@ -471,6 +474,7 @@ public:
 	// iOS only for now
 	bool bAudioMixWithOthers;
 	bool bAudioRespectSilentMode;
+	bool bMuteOnLostFocus;  // Desktop only, see AudioCommon.h.
 
 	// UI
 	bool bShowDebuggerOnLoad;
