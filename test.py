@@ -349,12 +349,14 @@ tests_good = [
   "intr/vblank/vblank",
   "intr/delays/delays",
   "io/cwd/cwd",
+  "io/file/file",
   "io/file/rename",
   "io/fatmsdevctl/fatmsdevctl",
   "io/directory/directory",
   "io/stat/stat",
   "io/stat/readonly",
   "io/open/badparent",
+  "io/async/async",
   "jpeg/create",
   "jpeg/delete",
   "jpeg/finish",
@@ -752,7 +754,6 @@ tests_next = [
   "me/audiofifo",  # needs the Media Engine on, and Sony's ME firmware installed
   "me/vram",  # needs the Media Engine on, and Sony's ME firmware installed
   "sysmem/kernel/heapgrow",
-  "io/file/file",
   "io/io/io",
   "io/iodrv/iodrv",
   "io/shortname/shortname",
